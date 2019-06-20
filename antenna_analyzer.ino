@@ -7,9 +7,9 @@
 
 Si5351 si5351;
 
-#define TFT_CS        41
-#define TFT_RST       43 // Or set to -1 and connect to Arduino RESET pin
-#define TFT_DC        45
+#define TFT_CS        10
+#define TFT_RST        9 // Or set to -1 and connect to Arduino RESET pin
+#define TFT_DC         8
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
@@ -22,10 +22,14 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 #define GRAPH_WIDTH  (GRAPH_RIGHT-GRAPH_LEFT)
 #define PIP_WIDTH 3
 #define PIP_INCREMENT 32
+#define PIP_COUNT 3
 
 #define FWD_PIN A0
 #define REV_PIN A1
-#define NUM_READINGS 5
+#define NUM_READINGS 10
+
+#define ADC_RESOLUTION 12
+#define ADC_DIVISOR (2**ADC_RESOLUTION)
 
 
 const char *pipLabels[] = {"2.5", "2.0", "1.5", "1.0"};
@@ -42,24 +46,20 @@ const long fakeGraphData[] = {
 
 const int fakeGraphPoints = 96;
 
-long graphData[96];
-int graphDataPoints = 96;
+#define NUM_DATA_POINTS 96
+float swrReadings[96];
+
+float maxSWR = 10.0;
 
 void setup() {
-  Serial.begin(115200);
-  //analogReference(INTERNAL1V1);
+  SerialUSB.begin(115200);
+  analogReference(AR_EXTERNAL);
+  analogReadResolution(12);
   pinMode(FWD_PIN, INPUT);
   pinMode(REV_PIN, INPUT);
   tft.initR(INITR_144GREENTAB); // Init ST7735R chip, green tab
   initFreqSource();
   drawGraphAxes();
-}
-
-void drawDongs() {
-  tft.setCursor(48, 48);
-  tft.setFont();
-  tft.setTextSize(2);
-  tft.print("8==D");
 }
 
 void initFreqSource() {
@@ -85,31 +85,38 @@ void sweep(unsigned long long start_f, unsigned long long end_f, unsigned int po
   unsigned long long step = (end_f - start_f) / points;
   unsigned long long l;
   int i;
-  long fwd, rev;
+  unsigned long fwd, rev;
   for(i = 0, l = start_f; l <= end_f; i++, l += step) {
+    // Set Si5351 to tested frequency
     si5351.set_freq(l * 100ULL, SI5351_CLK0);
     fwd = 0; rev = 0;
+    // Take NUM_READINGS values from the forward and reverse ADCs
     for (int j = 0; j < NUM_READINGS; j++) {
       fwd += analogRead(FWD_PIN);
       rev += analogRead(REV_PIN);
     }
+    // Average the forward and reverse readings at the tested frequency 
     fwd /= NUM_READINGS;
     rev /= NUM_READINGS;
-    float ffwd, frev;
-    ffwd = fwd / 1024.0;
-    frev = rev / 1024.0;
-    float swr = (fwd+rev)/(fwd-rev);
-    //float swr = (ffwd+frev)/(ffwd-frev);
 
-    graphData[i] = GRAPH_HEIGHT * swr;
-    Serial.print("Freq: ");
-    Serial.print((float)(l/1000000.0));
-    Serial.print(" fwd: ");
-    Serial.print(ffwd);
-    Serial.print(" rev: ");
-    Serial.print(frev);
-    Serial.print(" swr: ");
-    Serial.println(swr);
+    float ffwd, frev;
+    ffwd = (float)fwd;
+    frev = (float)rev;
+
+    float rho = sqrt(frev/ffwd);
+    float swr = (1.0+rho)/(1.0-rho);
+
+    swrReadings[i] = swr;
+    SerialUSB.print("Freq: ");
+    SerialUSB.print((float)(l/1000000.0), 3);
+    SerialUSB.print("MHz fwd: ");
+    SerialUSB.print(ffwd);
+    SerialUSB.print(" rev: ");
+    SerialUSB.print(frev);
+    SerialUSB.print(" rho: ");
+    SerialUSB.print(rho, 4);
+    SerialUSB.print(" swr: ");
+    SerialUSB.println(swr, 4);
   }
 }
 
@@ -120,23 +127,46 @@ void drawGraphAxes() {
   // Draw SWR graph border
   tft.drawFastVLine(GRAPH_LEFT-1, GRAPH_TOP, GRAPH_HEIGHT+1, ST77XX_YELLOW);
   tft.drawFastVLine(GRAPH_RIGHT+1, GRAPH_TOP, GRAPH_HEIGHT+1, ST77XX_YELLOW);
-  tft.drawFastHLine(GRAPH_LEFT-1, GRAPH_BOTTOM+1, GRAPH_WIDTH+2, ST77XX_YELLOW);
+  tft.drawFastHLine(GRAPH_LEFT-1, GRAPH_BOTTOM+1, GRAPH_WIDTH+3, ST77XX_YELLOW);
 }
 
-void drawGraph(long *graph, int numpoints) {
+unsigned int swr_to_graph_y(float swrReading) {
+  return (unsigned int)(GRAPH_HEIGHT - (GRAPH_HEIGHT * (swrReading / maxSWR)));
+}
+
+void drawGraph(float *graph, int numpoints) {
   for (int i=0; i<numpoints; i++) {
-    tft.drawPixel(i+GRAPH_LEFT+1, (GRAPH_HEIGHT-map(graph[i], 0, 1023, 0, 96))+GRAPH_TOP, ST77XX_GREEN);
+#if 0    
+    tft.drawPixel(i+GRAPH_LEFT+1, (GRAPH_HEIGHT-graph[i])+GRAPH_TOP-1, ST77XX_RED);
+#else
+    tft.drawPixel(i+GRAPH_LEFT+1, swr_to_graph_y(graph[i]), ST77XX_GREEN);
+#endif
   }
 }
 
 void clearGraph() {
-  fillRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_WIDTH, GRAPH_HEIGHT, ST77XX_BLACK);
+  tft.fillRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_WIDTH, GRAPH_HEIGHT, ST77XX_BLACK);
   drawLegend();
+}
+
+void drawPips() {
+  tft.setFont();
+  tft.setTextSize(1);
+  for (int i=0; i<PIP_COUNT; i++) {
+    int pip_y = GRAPH_TOP+((GRAPH_HEIGHT/PIP_COUNT)*i);
+    tft.drawFastHLine(GRAPH_LEFT, pip_y, PIP_WIDTH, ST77XX_WHITE);
+    tft.drawFastHLine((GRAPH_RIGHT-PIP_WIDTH)+1, pip_y, PIP_WIDTH, ST77XX_WHITE);
+
+    tft.setCursor(1, pip_y+4);
+    tft.setTextColor(pipColors[i]);
+    tft.print(maxSWR-((maxSWR/PIP_COUNT)*i), 1);
+  }
 }
 
 void drawLegend() {
   tft.setFont();
   tft.setTextSize(1);
+#if 0
   for (int i=0; i<(GRAPH_HEIGHT/PIP_INCREMENT); i++) {
     // Draw pips for SWR levels
     tft.drawFastHLine(GRAPH_LEFT, GRAPH_TOP+(PIP_INCREMENT*i), PIP_WIDTH, ST77XX_WHITE);
@@ -151,6 +181,7 @@ void drawLegend() {
   tft.setCursor(1, (idx*PIP_INCREMENT)+4);
   tft.setTextColor(ST77XX_GREEN);
   tft.print(pipLabels[idx]);
+#endif
 
   tft.setTextColor(ST77XX_WHITE);
   tft.setCursor(0, 118);
@@ -162,17 +193,18 @@ void drawLegend() {
 void loop() {
   // Read the Status Register and print it every 10 seconds
   si5351.update_status();
-  Serial.print("SYS_INIT: ");
-  Serial.print(si5351.dev_status.SYS_INIT);
-  Serial.print("  LOL_A: ");
-  Serial.print(si5351.dev_status.LOL_A);
-  Serial.print("  LOL_B: ");
-  Serial.print(si5351.dev_status.LOL_B);
-  Serial.print("  LOS: ");
-  Serial.print(si5351.dev_status.LOS);
-  Serial.print("  REVID: ");
-  Serial.println(si5351.dev_status.REVID);
+  SerialUSB.print("SYS_INIT: ");
+  SerialUSB.print(si5351.dev_status.SYS_INIT);
+  SerialUSB.print("  LOL_A: ");
+  SerialUSB.print(si5351.dev_status.LOL_A);
+  SerialUSB.print("  LOL_B: ");
+  SerialUSB.print(si5351.dev_status.LOL_B);
+  SerialUSB.print("  LOS: ");
+  SerialUSB.print(si5351.dev_status.LOS);
+  SerialUSB.print("  REVID: ");
+  SerialUSB.println(si5351.dev_status.REVID);
 
+#if 0
   delay(10000);
   if (si5351.dev_status.SYS_INIT == 0 && si5351.dev_status.LOL_A == 0 && si5351.dev_status.LOL_B == 0 && si5351.dev_status.LOS == 0) {
     clearGraph();
@@ -180,4 +212,19 @@ void loop() {
     drawGraph(graphData, graphDataPoints);
   }
   drawLegend();
+#endif
+
+  SerialUSB.print("sweep");
+
+  sweep(14000000ULL, 14350000ULL, NUM_DATA_POINTS);
+  SerialUSB.print("clearGraph");
+  clearGraph();
+  SerialUSB.print("drawGraph");  
+  drawGraph(swrReadings, NUM_DATA_POINTS);
+  SerialUSB.print("drawPips");
+  drawPips();
+  SerialUSB.print("drawLegend");
+  drawLegend();
+  SerialUSB.print("delay");
+  delay(1000);
 }
