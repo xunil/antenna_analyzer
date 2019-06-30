@@ -16,12 +16,17 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 #define GRAPH_TOP      8
 #define GRAPH_RIGHT  120
 #define GRAPH_BOTTOM 104
-
 #define GRAPH_HEIGHT (GRAPH_BOTTOM-GRAPH_TOP)
 #define GRAPH_WIDTH  (GRAPH_RIGHT-GRAPH_LEFT)
+
 #define PIP_WIDTH 3
 #define PIP_INCREMENT 32
 #define PIP_COUNT 3
+
+#define LEGEND_LEFT    0
+#define LEGEND_TOP   108
+#define LEGEND_WIDTH 128
+#define LEGEND_HEIGHT 20
 
 #define FWD_PIN A0
 #define REV_PIN A1
@@ -35,9 +40,11 @@ const char *pipLabels[] = {"2.5", "2.0", "1.5", "1.0"};
 const int pipColors[] = {ST77XX_RED, ST77XX_ORANGE, ST77XX_YELLOW, ST77XX_WHITE};
 
 #define NUM_DATA_POINTS 96
-float swrReadings[96];
+float swrReadings[NUM_DATA_POINTS];
 
 float maxSWR = 10.0;
+float minSWR = maxSWR;
+unsigned long long minSWRFreq = 0LL;
 
 void setup() {
   SerialUSB.begin(115200);
@@ -46,8 +53,17 @@ void setup() {
   pinMode(FWD_PIN, INPUT);
   pinMode(REV_PIN, INPUT);
   tft.initR(INITR_144GREENTAB); // Init ST7735R chip, green tab
+#if 1
+  clearSwrReadingsArray();
+#endif
   initFreqSource();
   drawGraphAxes();
+}
+
+void clearSwrReadingsArray() {
+  for (int i=0; i<NUM_DATA_POINTS; i++) {
+    swrReadings[i] = 0.0;
+  }
 }
 
 void initFreqSource() {
@@ -69,13 +85,17 @@ void initFreqSource() {
   delay(1000);
 }
 
-#if 0
+#if 1
 void sweep(unsigned long long start_f, unsigned long long end_f, unsigned int points) {
   unsigned long long step = (end_f - start_f) / points;
   unsigned long long l;
   int i;
   unsigned long fwd, rev;
-  for(i = 0, l = start_f; l <= end_f; i++, l += step) {
+  minSWR = maxSWR;
+  minSWRFreq = start_f;
+
+//  for(i = 0, l = start_f; l <= end_f; i++, l += step) {
+  for(i = 0, l = start_f; i < points; i++, l += step) {
     // Set Si5351 to tested frequency
     si5351.set_freq(l * 100ULL, SI5351_CLK0);
     fwd = 0; rev = 0;
@@ -92,10 +112,16 @@ void sweep(unsigned long long start_f, unsigned long long end_f, unsigned int po
     ffwd = (float)fwd;
     frev = (float)rev;
 
-    float rho = sqrt(frev/ffwd);
+    //float rho = sqrt(frev/ffwd);
+    float rho = frev/ffwd;
     float swr = (1.0+rho)/(1.0-rho);
 
     swrReadings[i] = swr;
+    if (swr < minSWR) {
+      minSWR = swr;
+      minSWRFreq = l;
+    }
+
     SerialUSB.print("Freq: ");
     SerialUSB.print((float)(l/1000000.0), 3);
     SerialUSB.print("MHz fwd: ");
@@ -121,22 +147,17 @@ void drawGraphAxes() {
 }
 
 unsigned int swr_to_graph_y(float swrReading) {
-  return (unsigned int)(GRAPH_HEIGHT - (GRAPH_HEIGHT * (swrReading / maxSWR)));
+  return max(GRAPH_TOP, (unsigned int)(GRAPH_HEIGHT - (GRAPH_HEIGHT * (swrReading / maxSWR))));
 }
 
 void drawGraph(float *graph, int numpoints) {
   for (int i=0; i<numpoints; i++) {
-#if 0    
-    tft.drawPixel(i+GRAPH_LEFT+1, (GRAPH_HEIGHT-graph[i])+GRAPH_TOP-1, ST77XX_RED);
-#else
     tft.drawPixel(i+GRAPH_LEFT+1, swr_to_graph_y(graph[i]), ST77XX_GREEN);
-#endif
   }
 }
 
 void clearGraph() {
   tft.fillRect(GRAPH_LEFT, GRAPH_TOP, GRAPH_WIDTH, GRAPH_HEIGHT, ST77XX_BLACK);
-  drawLegend();
 }
 
 void drawPips() {
@@ -153,27 +174,21 @@ void drawPips() {
   }
 }
 
+void clearLegend() {
+  tft.fillRect(LEGEND_LEFT, LEGEND_TOP, LEGEND_WIDTH, LEGEND_HEIGHT, ST77XX_BLACK);
+}
+
 void drawLegend() {
   tft.setFont();
   tft.setTextSize(1);
-#if 0
-  for (int i=0; i<(GRAPH_HEIGHT/PIP_INCREMENT); i++) {
-    // Draw pips for SWR levels
-    tft.drawFastHLine(GRAPH_LEFT, GRAPH_TOP+(PIP_INCREMENT*i), PIP_WIDTH, ST77XX_WHITE);
-    tft.drawFastHLine((GRAPH_RIGHT-PIP_WIDTH)+1, GRAPH_TOP+(PIP_INCREMENT*i), PIP_WIDTH, ST77XX_WHITE);
-    // Label the pips 
-    tft.setCursor(1, (i*PIP_INCREMENT)+4);
-    tft.setTextColor(pipColors[i]);
-    tft.print(pipLabels[i]);
-  }
-
-  int idx = (GRAPH_HEIGHT/PIP_INCREMENT);
-  tft.setCursor(1, (idx*PIP_INCREMENT)+4);
-  tft.setTextColor(ST77XX_GREEN);
-  tft.print(pipLabels[idx]);
-#endif
-
   tft.setTextColor(ST77XX_WHITE);
+
+  tft.setCursor(0, 108);
+  tft.print("MIN SWR:");
+  tft.print(minSWR, 1);
+  tft.setCursor(88, 108);
+  tft.print("@");
+  tft.print((float)minSWRFreq/1000000.0, 3);
   tft.setCursor(0, 118);
   tft.print("CTR:14.175");  // FIXME: actually reference the band we're using
   tft.setCursor(68, 118); // FIXME: calculate string width to determine X
@@ -204,20 +219,11 @@ void loop() {
   drawLegend();
 #endif
 
-#if 0
-  SerialUSB.println("sweep");
   sweep(14000000ULL, 14350000ULL, NUM_DATA_POINTS);
-#endif
-  SerialUSB.println("clearGraph");
   clearGraph();
-#if 0
-  SerialUSB.println("drawGraph");  
+  clearLegend();
   drawGraph(swrReadings, NUM_DATA_POINTS);
-#endif
-  SerialUSB.println("drawPips");
   drawPips();
-  SerialUSB.println("drawLegend");
   drawLegend();
-  SerialUSB.println("delay");
   delay(1000);
 }
