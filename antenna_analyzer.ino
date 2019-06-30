@@ -1,6 +1,5 @@
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ST7735.h> // Hardware-specific library for ST7735
-#include <Fonts/FreeMono9pt7b.h>
 #include <SPI.h>
 #include "si5351.h"
 #include <Wire.h>
@@ -35,17 +34,6 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 const char *pipLabels[] = {"2.5", "2.0", "1.5", "1.0"};
 const int pipColors[] = {ST77XX_RED, ST77XX_ORANGE, ST77XX_YELLOW, ST77XX_WHITE};
 
-const long fakeGraphData[] = {
-  1022, 988, 955, 921, 887, 854, 821, 787, 755, 722, 690, 658, 627, 596, 565,
-  535, 506, 477, 449, 421, 394, 368, 342, 317, 293, 270, 247, 226, 205, 185,
-  166, 148, 131, 115, 100, 86, 72, 60, 49, 40, 31, 23, 16, 11, 6, 3, 1, 0, 0, 1,
-  3, 6, 11, 16, 23, 31, 40, 50, 61, 73, 86, 100, 115, 131, 148, 166, 185, 205,
-  226, 248, 270, 293, 318, 342, 368, 394, 421, 449, 477, 506, 536, 566, 596,
-  627, 659, 691, 723, 755, 788, 821, 854, 888, 921, 955, 989, 1023
-};
-
-const int fakeGraphPoints = 96;
-
 #define NUM_DATA_POINTS 96
 float swrReadings[96];
 
@@ -67,12 +55,12 @@ void initFreqSource() {
 
   i2c_found = si5351.init(SI5351_CRYSTAL_LOAD_8PF, 0, 0);
   if(!i2c_found) {
-    Serial.println("Device not found on I2C bus!");
+    SerialUSB.println("Device not found on I2C bus!");
   }
 
   // Set CLK0 to output 14.175 MHz
   si5351.set_freq(1417500000ULL, SI5351_CLK0);
-  si5351.drive_strength(SI5351_CLK0, SI5351_DRIVE_8MA);
+  si5351.drive_strength(SI5351_CLK0, SI5351_DRIVE_2MA);
   si5351.output_enable(SI5351_CLK0, 1);
 
   // Query a status update and wait a bit to let the Si5351 populate the
@@ -81,6 +69,7 @@ void initFreqSource() {
   delay(1000);
 }
 
+#if 0
 void sweep(unsigned long long start_f, unsigned long long end_f, unsigned int points) {
   unsigned long long step = (end_f - start_f) / points;
   unsigned long long l;
@@ -119,6 +108,7 @@ void sweep(unsigned long long start_f, unsigned long long end_f, unsigned int po
     SerialUSB.println(swr, 4);
   }
 }
+#endif
 
 void drawGraphAxes() {
   // Clear the screen
@@ -157,7 +147,7 @@ void drawPips() {
     tft.drawFastHLine(GRAPH_LEFT, pip_y, PIP_WIDTH, ST77XX_WHITE);
     tft.drawFastHLine((GRAPH_RIGHT-PIP_WIDTH)+1, pip_y, PIP_WIDTH, ST77XX_WHITE);
 
-    tft.setCursor(1, pip_y+4);
+    tft.setCursor(0, pip_y-2);
     tft.setTextColor(pipColors[i]);
     tft.print(maxSWR-((maxSWR/PIP_COUNT)*i), 1);
   }
@@ -214,17 +204,20 @@ void loop() {
   drawLegend();
 #endif
 
-  SerialUSB.print("sweep");
-
+#if 0
+  SerialUSB.println("sweep");
   sweep(14000000ULL, 14350000ULL, NUM_DATA_POINTS);
-  SerialUSB.print("clearGraph");
+#endif
+  SerialUSB.println("clearGraph");
   clearGraph();
-  SerialUSB.print("drawGraph");  
+#if 0
+  SerialUSB.println("drawGraph");  
   drawGraph(swrReadings, NUM_DATA_POINTS);
-  SerialUSB.print("drawPips");
+#endif
+  SerialUSB.println("drawPips");
   drawPips();
-  SerialUSB.print("drawLegend");
+  SerialUSB.println("drawLegend");
   drawLegend();
-  SerialUSB.print("delay");
+  SerialUSB.println("delay");
   delay(1000);
 }
